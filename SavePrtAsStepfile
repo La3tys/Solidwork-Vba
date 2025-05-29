@@ -1,0 +1,81 @@
+Option Explicit
+'-------------------------------------------------------------------------------
+' Preconditions: Verify that the specified SOLIDWORKS part document to open exists.
+'
+' Postconditions:
+' 1. Opens the specified SOLIDWORKS part document.
+' 2. Saves the SOLIDWORKS part document as a STEP file.
+' 3. Closes the SOLIDWORKS part document.
+' 4. Imports the STEP file created in step 2.
+' 5. Runs import diagnostics on the STEP file and repairs any bad faces.
+' 6. Creates Imported1 in the FeatureManager design tree.
+'-------------------------------------------------------------------------------
+
+Sub ExportImportSTEP()
+
+    ' Initialize file paths
+ 
+    
+Dim swApp As SldWorks.SldWorks
+Dim swModel As SldWorks.ModelDoc2
+Dim swPart As SldWorks.PartDoc
+Dim swModelDocExt As SldWorks.ModelDocExtension
+Dim swImportStepData As SldWorks.ImportStepData
+Dim status As Boolean
+Dim errors As Long
+Dim warnings As Long
+Dim fileName As String
+Dim stepFileName As String
+
+    fileName = "C:\Users\yunn.sheng\OneDrive - HQ Pack\Desktop\905268531\3 ENGINEERING\905268981 - LABEL INFO CONTENT IDL HERE (draft).SLDPRT"
+    stepFileName = "C:\Users\yunn.sheng\OneDrive - HQ Pack\Desktop\905268531\3 ENGINEERING\905268981 - LABEL INFO CONTENT IDL HERE (draft).STEP"
+    
+    ' Validate file exists
+    If Dir(fileName) = "" Then
+        MsgBox "SLDPRT file not found: " & fileName, vbCritical
+        Exit Sub
+    End If
+    
+    Set swApp = Application.SldWorks
+
+    ' Open part file silently
+    Set swModel = swApp.OpenDoc6(fileName, swDocumentTypes_e.swDocPART, swOpenDocOptions_e.swOpenDocOptions_Silent, "", errors, warnings)
+    If swModel Is Nothing Then
+        MsgBox "Failed to open part file.", vbCritical
+        Exit Sub
+    End If
+    
+    Set swPart = swModel
+    Set swModelDocExt = swModel.Extension
+
+    ' Export to STEP
+    status = swModelDocExt.SaveAs(stepFileName, swSaveAsVersion_e.swSaveAsCurrentVersion, swSaveAsOptions_e.swSaveAsOptions_Silent, Nothing, errors, warnings)
+    If Not status Then
+        MsgBox "Failed to export STEP file.", vbCritical
+        swApp.CloseDoc swModel.GetTitle
+        Exit Sub
+    End If
+    
+    ' Close the original SLDPRT file
+    swApp.CloseDoc swModel.GetTitle
+    
+    ' Prepare to import STEP file
+    Set swImportStepData = swApp.GetImportFileData(stepFileName)
+    swImportStepData.MapConfigurationData = True
+
+    ' Import STEP file
+    Set swPart = swApp.LoadFile4(stepFileName, "r", swImportStepData, errors)
+    If swPart Is Nothing Then
+        MsgBox "Failed to import STEP file.", vbCritical
+        Exit Sub
+    End If
+    
+    Set swModel = swPart
+    Set swModelDocExt = swModel.Extension
+
+    ' Run import diagnostics
+    errors = swPart.ImportDiagnosis(True, False, True, 0)
+    
+    MsgBox "STEP file exported and imported successfully with " & errors & " issues fixed.", vbInformation
+
+End Sub
