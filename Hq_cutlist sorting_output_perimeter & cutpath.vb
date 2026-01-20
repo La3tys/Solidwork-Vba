@@ -1,4 +1,7 @@
-' Ensure "Microsoft Forms 2.0 Object Library" is enabled in Tools > References
+' "SldWorks" is the main application object. "ModelDoc2" is your specific Part or Assembly file.
+' "Feature" refers to items in your tree (like Cut-List folders).
+' "Body2" is the actual 3D solid lump of metal.
+
 Sub main()
     Dim swApp As SldWorks.SldWorks
     Dim swModel As SldWorks.ModelDoc2
@@ -12,82 +15,90 @@ Sub main()
     Dim zCoords() As Double
     Dim count As Integer: count = 0
 
+    ' Connect to the active SolidWorks session
     Set swApp = Application.SldWorks
     Set swModel = swApp.ActiveDoc
     If swModel Is Nothing Then Exit Sub
     
-    ' 1. FORCE UPDATE CUT LIST
+    ' --- STEP 1: PREP ---
+    ' RunCommand 2014 is a built-in SolidWorks ID for "Update/Sort Cut List". 
+    ' This ensures the model is calculated before we read it.
     swModel.Extension.SelectByID2 "Update Cut Lists", "COMMAND", 0, 0, 0, False, 0, Nothing, 0
     
-    ' 2. SCAN AND GET COORDINATES (Z-AXIS)
+    ' --- STEP 2: SCAN THE TREE ---
+    ' We start at the very first feature in your FeatureManager tree.
     Set swFeat = swModel.FirstFeature
     Do While Not swFeat Is Nothing
+        ' We only care about "CutListFolder" features.
         If swFeat.GetTypeName2 = "CutListFolder" Then
             Set swFolder = swFeat.GetSpecificFeature2
             If Not swFolder Is Nothing Then
-                vBodies = swFolder.GetBodies
+                vBodies = swFolder.GetBodies ' Get all solid bodies inside this folder
                 If Not IsEmpty(vBodies) Then
-                    Dim folderMaxZ As Double: folderMaxZ = -100000
+                    Dim folderMaxZ As Double: folderMaxZ = -100000 
                     Dim bFound As Boolean: bFound = False
                     Dim k As Integer
                     
                     For k = 0 To UBound(vBodies)
                         Set swBody = vBodies(k)
                         Dim vBox As Variant
-                        vBox = swBody.GetBodyBox
+                        ' GetBodyBox gives us the [MinX, MinY, MinZ, MaxX, MaxY, MaxZ] coordinates.
+                        vBox = swBody.GetBodyBox 
                         If Not IsEmpty(vBox) Then
+                            ' Since your Front Plane is perp to Y, the "Up" height is MaxZ (Index 5).
                             If vBox(5) > folderMaxZ Then folderMaxZ = vBox(5)
                             bFound = True
                         End If
                     Next k
                     
+                    ' Save the name and height for sorting later
                     If bFound Then
                         ReDim Preserve featNames(count)
                         ReDim Preserve zCoords(count)
                         featNames(count) = swFeat.Name
-                        zCoords(count) = folderMaxZ
+                        zCoords(count) = folderMaxZ 
                         count = count + 1
                     End If
                 End If
             End If
         End If
-        Set swFeat = swFeat.GetNextFeature
+        Set swFeat = swFeat.GetNextFeature ' Move to the next item in the tree
     Loop
 
-    ' 3. SORTING (Highest Z first)
+    ' --- STEP 3: BUBBLE SORT ---
+    ' Traditional sorting logic to order items by their Z-Height (Top to Bottom)
     Dim i As Integer, j As Integer
     Dim tempZ As Double, tempName As String
     For i = 0 To count - 2
         For j = i + 1 To count - 1
-            If zCoords(i) < zCoords(j) Then
+            If zCoords(i) < zCoords(j) Then ' Change < to > if you want Bottom-to-Top
                 tempZ = zCoords(i): zCoords(i) = zCoords(j): zCoords(j) = tempZ
                 tempName = featNames(i): featNames(i) = featNames(j): featNames(j) = tempName
             End If
         Next j
     Next i
 
-    ' 4. DATA COLLECTION
+    ' --- STEP 4: DATA EXTRACTION & RENAMING ---
     Dim tableData As String
     tableData = "Order" & vbTab & "Description" & vbTab & "L" & vbTab & "W" & vbTab & "T" & vbTab & "Qty" & vbTab & "Total Perimeter (mm)" & vbTab & "Faces" & vbCrLf
     
     For i = 0 To count - 1
         Set swFeat = swModel.FeatureByName(featNames(i))
         Set swFolder = swFeat.GetSpecificFeature2
-        Set swCustPropMgr = swFeat.CustomPropertyManager
+        Set swCustPropMgr = swFeat.CustomPropertyManager ' Access "File Properties" for this folder
         
         vBodies = swFolder.GetBodies
-        Dim itemQty As Long: itemQty = swFolder.GetBodyCount
+        Dim itemQty As Long: itemQty = swFolder.GetBodyCount ' Total count of parts in this folder
         Dim faceCount As Long: faceCount = 0
         Dim totalPerimeter As Double: totalPerimeter = 0
         
         If Not IsEmpty(vBodies) Then
-            Set swBody = vBodies(0)
-            faceCount = swBody.GetFaceCount
-            ' This now uses the Inner/Outer Loop Logic
-            totalPerimeter = GetGeometricPerimeterFromLoops(swBody)
+            Set swBody = vBodies(0) ' Look at the first body in the folder for geometry
+            faceCount = swBody.GetFaceCount ' Total count of connected surfaces (inner/outer)
+            totalPerimeter = GetGeometricPerimeterFromLoops(swBody) ' Call our custom math function
         End If
         
-        ' Get Properties
+        ' Resolve Custom Properties like "Description" or "Length"
         Dim strDesc As String, valOut As String, b As Boolean
         swCustPropMgr.Get6 "Description", False, valOut, strDesc, b, False
         
@@ -95,6 +106,7 @@ Sub main()
         Dim strW As String: strW = GetDeepProp(swCustPropMgr, Array("Width", "WIDTH", "Bounding Box Width"))
         Dim strT As String: strT = GetDeepProp(swCustPropMgr, Array("Thickness", "THICKNESS", "Sheet Metal Thickness"))
 
+        ' If properties are blank, use RegEx to pull numbers out of the "Description" string
         If strL = "-" Or strW = "-" Then
             Dim dims As Variant: dims = ParseDimsFromDesc(strDesc)
             If IsArray(dims) Then
@@ -102,20 +114,25 @@ Sub main()
             End If
         End If
 
-        ' Rename for Tree Sorting
+        ' PHYSICAL TREE SORTING: 
+        ' We rename the folders with 01_, 02_ etc. SolidWorks will use these names to sort the tree.
         Dim finalName As String: finalName = Format(i + 1, "00") & "_ " & strDesc
         On Error Resume Next
-        swFeat.Name = "SORT_" & i
+        swFeat.Name = "SORT_" & i ' Temporary name to prevent "name already exists" errors
         swFeat.Name = finalName
         On Error GoTo 0
         
+        ' Add data to our "Clipboard" string using TABS for Excel
         tableData = tableData & (i + 1) & vbTab & strDesc & vbTab & strL & vbTab & strW & vbTab & strT & vbTab & itemQty & vbTab & Round(totalPerimeter, 2) & vbTab & faceCount & vbCrLf
     Next i
 
-    ' 5. RE-SORT TREE & CLIPBOARD
+    ' --- STEP 5: FINAL TREE REORDER ---
+    ' We select the "Cut-List" and tell SolidWorks to run its internal "Sort" command.
+    ' Since we renamed them with numbers, they will move into the correct physical order.
     swModel.Extension.SelectByID2 "Cut-List", "SUBWELD", 0, 0, 0, False, 0, Nothing, 0
-    swModel.Extension.RunCommand 2014, ""
+    swModel.Extension.RunCommand 2014, "" 
 
+    ' Copy the result to the clipboard
     Dim DataObj As Object
     On Error Resume Next
     Set DataObj = CreateObject("New:{1C3B4210-F441-11CE-B9EA-00AA006B1A69}")
@@ -123,10 +140,11 @@ Sub main()
     DataObj.PutInClipboard
 
     swModel.ForceRebuild3 True
-    MsgBox "Success! Tree sorted and Loop-based perimeter copied."
+    MsgBox "Success! Tree sorted and data ready for Excel."
 End Sub
 
-' UPDATED: Handles Inner and Outer Loops explicitly
+' --- GEOMETRY HELPER ---
+' This function navigates the "Topology" of the part.
 Function GetGeometricPerimeterFromLoops(swBody As SldWorks.Body2) As Double
     Dim swFace As SldWorks.Face2
     Dim vNormal As Variant
@@ -139,56 +157,30 @@ Function GetGeometricPerimeterFromLoops(swBody As SldWorks.Body2) As Double
     Dim i As Integer, j As Integer
     Dim totalLength As Double: totalLength = 0
     
-    Set swFace = swBody.GetFirstFace
+    Set swFace = swBody.GetFirstFace ' Check the first surface of the solid
     Do While Not swFace Is Nothing
-        vNormal = swFace.Normal
-        ' Look for the face pointing Up (+Z)
+        vNormal = swFace.Normal ' Find which way the surface faces (X, Y, or Z)
+        ' 0.99 check means the face points Up along the Z-axis.
         If vNormal(2) > 0.99 Then
-            vLoops = swFace.GetLoops
+            vLoops = swFace.GetLoops ' A face has 1 Outer loop and many Inner loops (holes)
             If Not IsEmpty(vLoops) Then
                 For i = 0 To UBound(vLoops)
                     Set swLoop = vLoops(i)
-                    vEdges = swLoop.GetEdges
+                    vEdges = swLoop.GetEdges ' A loop is a chain of edges
                     If Not IsEmpty(vEdges) Then
                         For j = 0 To UBound(vEdges)
                             Set swEdge = vEdges(j)
-                            Set swCurve = swEdge.GetCurve
-                            vParams = swEdge.GetCurveParams2
-                            ' Summing every segment of the loop
+                            Set swCurve = swEdge.GetCurve ' The "Curve" contains the math/length
+                            vParams = swEdge.GetCurveParams2 ' Find where the edge starts and ends
+                            ' Calculate the true length of this segment
                             totalLength = totalLength + swCurve.GetLength3(vParams(6), vParams(7))
                         Next j
                     End If
                 Next i
-                GetGeometricPerimeterFromLoops = totalLength * 1000 ' Meters to mm
-                Exit Function
+                GetGeometricPerimeterFromLoops = totalLength * 1000 ' Convert Meters to Millimeters
+                Exit Function ' Found the top face, we can stop looking!
             End If
         End If
         Set swFace = swFace.GetNextFace
     Loop
-    GetGeometricPerimeterFromLoops = 0
-End Function
-
-Function GetDeepProp(mgr As SldWorks.CustomPropertyManager, names As Variant) As String
-    Dim i As Integer, val As String, res As String, b As Boolean
-    For i = LBound(names) To UBound(names)
-        mgr.Get6 CStr(names(i)), False, val, res, b, False
-        If res <> "" And Not res Like "*@*" Then
-            GetDeepProp = Trim(Replace(res, "mm", ""))
-            Exit Function
-        End If
-    Next i
-    GetDeepProp = "-"
-End Function
-
-Function ParseDimsFromDesc(desc As String) As Variant
-    On Error Resume Next
-    Dim regEx As Object: Set regEx = CreateObject("VBScript.RegExp")
-    Dim matches As Object: Dim results(2) As String
-    regEx.Global = True: regEx.Pattern = "[0-9.]+"
-    Set matches = regEx.Execute(desc)
-    If matches.count >= 3 Then
-        results(0) = matches(0): results(1) = matches(1): results(2) = matches(2)
-        ParseDimsFromDesc = results
-    Else: ParseDimsFromDesc = ""
-    End If
 End Function
