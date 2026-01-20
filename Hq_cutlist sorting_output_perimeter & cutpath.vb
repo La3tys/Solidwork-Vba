@@ -208,3 +208,75 @@ Sub main()
     
     MsgBox "Success! Tree sorted and Loop-based perimeter copied."
 End Sub
+
+
+' UPDATED: Handles Inner and Outer Loops explicitly
+Function GetGeometricPerimeterFromLoops(swBody As SldWorks.Body2) As Double
+    Dim swFace As SldWorks.Face2
+    Dim vNormal As Variant
+    Dim vLoops As Variant
+    Dim swLoop As SldWorks.Loop2
+    Dim vEdges As Variant
+    Dim swEdge As SldWorks.Edge
+    Dim swCurve As SldWorks.Curve
+    Dim vParams As Variant
+    Dim i As Integer, j As Integer
+    Dim totalLength As Double: totalLength = 0
+    
+    Set swFace = swBody.GetFirstFace
+    Do While Not swFace Is Nothing
+        vNormal = swFace.Normal
+        ' Look for the face pointing Up (+Z)
+        If vNormal(2) > 0.99 Then
+            vLoops = swFace.GetLoops
+            If Not IsEmpty(vLoops) Then
+                For i = 0 To UBound(vLoops)
+                    Set swLoop = vLoops(i)
+                    vEdges = swLoop.GetEdges
+                    If Not IsEmpty(vEdges) Then
+                        For j = 0 To UBound(vEdges)
+                            Set swEdge = vEdges(j)
+                            Set swCurve = swEdge.GetCurve
+                            vParams = swEdge.GetCurveParams2
+                            ' Summing every segment of the loop
+                            totalLength = totalLength + swCurve.GetLength3(vParams(6), vParams(7))
+                        Next j
+                    End If
+                Next i
+                GetGeometricPerimeterFromLoops = totalLength * 1000 ' Meters to mm
+                Exit Function
+            End If
+        End If
+        Set swFace = swFace.GetNextFace
+    Loop
+    GetGeometricPerimeterFromLoops = 0
+End Function
+
+Function GetDeepProp(mgr As SldWorks.CustomPropertyManager, names As Variant) As String
+    Dim i As Integer, val As String, res As String, b As Boolean
+    For i = LBound(names) To UBound(names)
+        mgr.Get6 CStr(names(i)), False, val, res, b, False
+        If res <> "" And Not res Like "*@*" Then
+            GetDeepProp = Trim(Replace(res, "mm", ""))
+            Exit Function
+        End If
+    Next i
+    GetDeepProp = "-"
+End Function
+
+Function ParseDimsFromDesc(desc As String) As Variant
+    On Error Resume Next
+    Dim regEx As Object: Set regEx = CreateObject("VBScript.RegExp")
+    Dim matches As Object: Dim results(2) As String
+    regEx.Global = True: regEx.Pattern = "[0-9.]+"
+    Set matches = regEx.Execute(desc)
+    If matches.count >= 3 Then
+        results(0) = matches(0): results(1) = matches(1): results(2) = matches(2)
+        ParseDimsFromDesc = results
+    Else: ParseDimsFromDesc = ""
+    End If
+End Function
+
+
+
+
