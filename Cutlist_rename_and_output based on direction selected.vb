@@ -102,7 +102,7 @@ Sub main()
         
         If Not IsEmpty(vBodies) Then
             Set swBody = vBodies(0)
-            faceCount = swBody.GetFaceCount
+            faceCount = swBody.GetFaceCount - 2
             totalPerimeter = GetGeometricPerimeter(swBody, normalIndex)
         End If
         
