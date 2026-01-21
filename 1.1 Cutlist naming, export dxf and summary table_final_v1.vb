@@ -129,7 +129,7 @@ Sub main()
             bFaceFound = SelectLargestFaceAndGetNormal(swBody, detectedAxis)
             
             If bFaceFound Then
-                Dim fileName As String: fileName = newName & ".dxf"
+                Dim fileName As String: fileName = newName & " (" & swFolderObj.GetBodyCount & "X) " & ".dxf"
                 Dim vAlign As Variant: vAlign = GetMatrixForAxis(detectedAxis)
                 
                 Dim bRet As Boolean
