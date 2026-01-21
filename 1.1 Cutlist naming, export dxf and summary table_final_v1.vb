@@ -4,7 +4,7 @@ Sub main()
     Dim swModel As SldWorks.ModelDoc2: Set swModel = swApp.ActiveDoc
     If swModel Is Nothing Then Exit Sub
     
-    ' 1. SORTING AXIS (Does not affect View Orientation anymore)
+    ' 1. SORTING AXIS
     Dim userDir As String: userDir = UCase(InputBox("Select axis for sorting sequence (X, Y, or Z):", "Sort Order", "Z"))
     If InStr("XYZ", userDir) = 0 Then Exit Sub
     
@@ -21,20 +21,20 @@ Sub main()
     Dim swFeat As SldWorks.Feature: Set swFeat = swModel.FirstFeature
     Dim featNames() As String, sortCoords() As Double, count As Integer: count = 0
     
+    ' Declare bBox once here (VBA scope is procedure-level)
+    Dim bBox As Variant
+    
     Do While Not swFeat Is Nothing
         If swFeat.GetTypeName2 = "CutListFolder" Then
             Dim swFolder As SldWorks.BodyFolder: Set swFolder = swFeat.GetSpecificFeature2
             Dim vBodies As Variant: vBodies = swFolder.GetBodies
             If Not IsEmpty(vBodies) Then
                 Dim swTempBody As SldWorks.Body2: Set swTempBody = vBodies(0)
-                Dim bBox As Variant: bBox = swTempBody.GetBodyBox
+                bBox = swTempBody.GetBodyBox ' <--- Assignment 1
                 
-                ' Filter small artifacts
                 If (bBox(3) - bBox(0)) > 0.001 Then
                     ReDim Preserve featNames(count): ReDim Preserve sortCoords(count)
                     featNames(count) = swFeat.name
-                    
-                    ' Sorting Coordinate
                     Dim idx As Integer: If userDir = "X" Then idx = 3 Else If userDir = "Y" Then idx = 4 Else idx = 5
                     sortCoords(count) = bBox(idx)
                     count = count + 1
@@ -64,57 +64,76 @@ Sub main()
     swModel.ClearSelection2 True
     
     For i = 0 To count - 1
+        ' === EXPLICIT VARIABLE RESET START ===
+        Dim valL As Double: valL = 0
+        Dim valW As Double: valW = 0
+        Dim valT As Double: valT = 0
+        Dim totalPerimeter As Double: totalPerimeter = 0
+        Dim faceCount As Long: faceCount = 0
+        Dim exportStatus As String: exportStatus = "No"
+        Dim strDesc As String: strDesc = ""
+        ' === EXPLICIT VARIABLE RESET END ===
+
         Dim swCurrFeat As SldWorks.Feature: Set swCurrFeat = swModel.FeatureByName(featNames(i))
         Dim swFolderObj As SldWorks.BodyFolder: Set swFolderObj = swCurrFeat.GetSpecificFeature2
         Dim vBods As Variant: vBods = swFolderObj.GetBodies
         
         If Not IsEmpty(vBods) Then
             Dim swBody As SldWorks.Body2: Set swBody = vBods(0)
+            faceCount = swBody.GetFaceCount
             
-            ' A. CALCULATE DIMENSIONS (Smart Sort L > W > T)
-            Dim bBox As Variant: bBox = swBody.GetBodyBox
-            Dim dArr(2) As Double
-            dArr(0) = bBox(3) - bBox(0) ' X Len
-            dArr(1) = bBox(4) - bBox(1) ' Y Len
-            dArr(2) = bBox(5) - bBox(2) ' Z Len
-            Call SortArray(dArr) ' Result: dArr(0)=Thickness, dArr(1)=Width, dArr(2)=Length
+            ' A. CALCULATE DIMENSIONS
+            ' === FIX IS HERE: Don't Re-Dim, just Assign ===
+            bBox = swBody.GetBodyBox
             
-            Dim valT As Double: valT = Round(dArr(0) * 1000, 2)
-            Dim valW As Double: valW = Round(dArr(1) * 1000, 2)
-            Dim valL As Double: valL = Round(dArr(2) * 1000, 2)
+            If Not IsEmpty(bBox) Then
+                Dim dArr(2) As Double
+                dArr(0) = bBox(3) - bBox(0) ' X Len
+                dArr(1) = bBox(4) - bBox(1) ' Y Len
+                dArr(2) = bBox(5) - bBox(2) ' Z Len
+                
+                ' Inline Bubble Sort (Smallest to Largest)
+                Dim x As Integer, y As Integer, temp As Double
+                For x = 0 To 1
+                    For y = x + 1 To 2
+                        If dArr(x) > dArr(y) Then
+                            temp = dArr(x): dArr(x) = dArr(y): dArr(y) = temp
+                        End If
+                    Next y
+                Next x
+                
+                valT = Round(dArr(0) * 1000, 2) ' Smallest
+                valW = Round(dArr(1) * 1000, 2) ' Middle
+                valL = Round(dArr(2) * 1000, 2) ' Largest
+            End If
             
             ' B. GET PROPERTIES
             Dim swCustPropMgr As SldWorks.CustomPropertyManager: Set swCustPropMgr = swCurrFeat.CustomPropertyManager
-            Dim strDesc As String: strDesc = GetDeepProp(swCustPropMgr, Array("Description", "DESCRIPTION"))
+            strDesc = GetDeepProp(swCustPropMgr, Array("Description", "DESCRIPTION"))
             If strDesc = "-" Then strDesc = swCurrFeat.name
             
-            ' C. RENAME CUT-LIST FOLDER
+            ' C. RENAME FOLDER
             Dim cleanDesc As String: cleanDesc = CleanFileName(strDesc)
             Dim newName As String: newName = Format(i + 1, "00") & "_" & cleanDesc
-            swCurrFeat.name = "TEMP_" & i
-            swCurrFeat.name = newName
             
-            ' D. SMART EXPORT (Surface Detection)
+            If swCurrFeat.name <> newName Then
+                swCurrFeat.name = "TEMP_" & i
+                swCurrFeat.name = newName
+            End If
+            
+            ' D. SMART EXPORT
             swBody.HideBody False
             
-            ' 1. Select the Largest Face (Length x Width)
-            ' This function returns the Normal Axis of that face ("X", "Y", or "Z")
             Dim detectedAxis As String
             Dim bFaceFound As Boolean
             bFaceFound = SelectLargestFaceAndGetNormal(swBody, detectedAxis)
             
-            Dim exportStatus As String: exportStatus = "No"
             If bFaceFound Then
                 Dim fileName As String: fileName = newName & ".dxf"
+                Dim vAlign As Variant: vAlign = GetMatrixForAxis(detectedAxis)
                 
-                ' 2. Get Matrix matching that Face's Normal
-                Dim vAlign As Variant
-                vAlign = GetMatrixForAxis(detectedAxis)
-                
-                ' 3. Export
                 Dim bRet As Boolean
-                ' Using Option 1 (ExportSelectedFacesOrLoops) combined with the Matrix
-                ' ensures we view the selected face "Head On"
+                ' Export using Option 2 (as requested)
                 bRet = swPart.ExportToDWG2(dxfPath & fileName, fullPath, 2, True, vAlign, False, False, 0, Nothing)
                 
                 If bRet Then
@@ -122,14 +141,15 @@ Sub main()
                     exportStatus = "Yes"
                 End If
                 
-                ' E. PERIMETER (Calculate on the detected face axis)
+                ' E. PERIMETER
                 Dim normIdx As Integer
                 If detectedAxis = "X" Then normIdx = 0 Else If detectedAxis = "Y" Then normIdx = 1 Else normIdx = 2
-                Dim totalPerimeter As Double: totalPerimeter = GetGeometricPerimeter(swBody, normIdx)
-                
-                Dim locVal As Double: locVal = Round(sortCoords(i) * 1000, 2)
-                tableData = tableData & (i + 1) & vbTab & strDesc & vbTab & valL & vbTab & valW & vbTab & valT & vbTab & swFolderObj.GetBodyCount & vbTab & Round(totalPerimeter, 2) & vbTab & swBody.GetFaceCount & vbTab & exportStatus & vbTab & locVal & vbCrLf
+                totalPerimeter = GetGeometricPerimeter(swBody, normIdx)
             End If
+            
+            ' F. BUILD TABLE ROW
+            Dim locVal As Double: locVal = Round(sortCoords(i) * 1000, 2)
+            tableData = tableData & (i + 1) & vbTab & strDesc & vbTab & valL & vbTab & valW & vbTab & valT & vbTab & swFolderObj.GetBodyCount & vbTab & Round(totalPerimeter, 2) & vbTab & faceCount & vbTab & exportStatus & vbTab & locVal & vbCrLf
         End If
         swModel.ClearSelection2 True
     Next i
@@ -138,25 +158,12 @@ Sub main()
     Dim DataObj As Object: Set DataObj = CreateObject("New:{1C3B4210-F441-11CE-B9EA-00AA006B1A69}")
     DataObj.SetText tableData: DataObj.PutInClipboard
     
-    MsgBox "Completed! " & successCount & " DXFs exported." & vbCrLf & "Views aligned to largest surface."
+    MsgBox "Completed! " & successCount & " DXFs exported."
     Shell "explorer.exe " & dxfPath, vbNormalFocus
 End Sub
 
 ' --- HELPER FUNCTIONS ---
 
-' BUBBLE SORT ARRAY (Smallest to Largest)
-Sub SortArray(ByRef arr() As Double)
-    Dim x As Integer, y As Integer, temp As Double
-    For x = LBound(arr) To UBound(arr) - 1
-        For y = x + 1 To UBound(arr)
-            If arr(x) > arr(y) Then
-                temp = arr(x): arr(x) = arr(y): arr(y) = temp
-            End If
-        Next y
-    Next x
-End Sub
-
-' NEW: Finds the largest face regardless of axis, selects it, and returns which axis it faces
 Function SelectLargestFaceAndGetNormal(body As SldWorks.Body2, ByRef axisOut As String) As Boolean
     Dim swFace As SldWorks.Face2: Set swFace = body.GetFirstFace
     Dim bestFace As SldWorks.Face2
@@ -168,16 +175,13 @@ Function SelectLargestFaceAndGetNormal(body As SldWorks.Body2, ByRef axisOut As 
         If area > maxArea Then
             maxArea = area
             Set bestFace = swFace
-            bestNormal = swFace.Normal ' Store normal of largest face
+            bestNormal = swFace.Normal
         End If
         Set swFace = swFace.GetNextFace
     Loop
     
     If Not bestFace Is Nothing Then
         bestFace.Select4 False, Nothing
-        
-        ' Determine Axis from Normal Vector
-        ' Normal is (X, Y, Z). If X is close to 1 or -1, it's X-Axis.
         If Abs(bestNormal(0)) > 0.9 Then
             axisOut = "X"
         ElseIf Abs(bestNormal(1)) > 0.9 Then
@@ -185,7 +189,6 @@ Function SelectLargestFaceAndGetNormal(body As SldWorks.Body2, ByRef axisOut As 
         Else
             axisOut = "Z"
         End If
-        
         SelectLargestFaceAndGetNormal = True
     Else
         SelectLargestFaceAndGetNormal = False
@@ -194,14 +197,10 @@ End Function
 
 Function GetMatrixForAxis(axis As String) As Variant
     Dim vData(11) As Double
-    ' The view matrix: X-vector, Y-vector, Z-vector (Normal)
     Select Case axis
-        Case "X"
-            vData(5) = 1: vData(7) = 1: vData(9) = 1 ' Normal = X
-        Case "Y"
-            vData(3) = 1: vData(8) = 1: vData(10) = 1 ' Normal = Y
-        Case "Z"
-            vData(3) = 1: vData(7) = 1: vData(11) = 1 ' Normal = Z
+        Case "X": vData(5) = 1: vData(7) = 1: vData(9) = 1
+        Case "Y": vData(3) = 1: vData(8) = 1: vData(10) = 1
+        Case "Z": vData(3) = 1: vData(7) = 1: vData(11) = 1
     End Select
     GetMatrixForAxis = vData
 End Function
@@ -211,7 +210,6 @@ Function GetGeometricPerimeter(swBody As SldWorks.Body2, normalIdx As Integer) A
     Do While Not swFace Is Nothing
         Dim vNormal As Variant: vNormal = swFace.Normal
         If Abs(vNormal(normalIdx)) > 0.99 Then
-            ' Found a face matching our export axis
             Dim vLoops As Variant: vLoops = swFace.GetLoops
             If Not IsEmpty(vLoops) Then
                 Dim i As Integer, totalLength As Double: totalLength = 0
