@@ -4,9 +4,11 @@ Sub main()
     Dim swModel As SldWorks.ModelDoc2: Set swModel = swApp.ActiveDoc
     If swModel Is Nothing Then Exit Sub
     
-    ' 1. SORTING AXIS
+    ' 1. SORTING AXIS (FIXED VALIDATION)
     Dim userDir As String: userDir = UCase(InputBox("Select axis for sorting sequence (X, Y, or Z):", "Sort Order", "Z"))
-    If InStr("XYZ", userDir) = 0 Then Exit Sub
+    
+    ' If the user clicked Cancel, Closed the window, or typed nonsense, Exit immediately.
+    If userDir <> "X" And userDir <> "Y" And userDir <> "Z" Then Exit Sub
     
     ' 2. PREP OUTPUT
     Dim fullPath As String: fullPath = swModel.GetPathName
@@ -21,7 +23,6 @@ Sub main()
     Dim swFeat As SldWorks.Feature: Set swFeat = swModel.FirstFeature
     Dim featNames() As String, sortCoords() As Double, count As Integer: count = 0
     
-    ' Declare bBox once here (VBA scope is procedure-level)
     Dim bBox As Variant
     
     Do While Not swFeat Is Nothing
@@ -30,7 +31,7 @@ Sub main()
             Dim vBodies As Variant: vBodies = swFolder.GetBodies
             If Not IsEmpty(vBodies) Then
                 Dim swTempBody As SldWorks.Body2: Set swTempBody = vBodies(0)
-                bBox = swTempBody.GetBodyBox ' <--- Assignment 1
+                bBox = swTempBody.GetBodyBox
                 
                 If (bBox(3) - bBox(0)) > 0.001 Then
                     ReDim Preserve featNames(count): ReDim Preserve sortCoords(count)
@@ -64,7 +65,6 @@ Sub main()
     swModel.ClearSelection2 True
     
     For i = 0 To count - 1
-        ' === EXPLICIT VARIABLE RESET START ===
         Dim valL As Double: valL = 0
         Dim valW As Double: valW = 0
         Dim valT As Double: valT = 0
@@ -72,7 +72,6 @@ Sub main()
         Dim faceCount As Long: faceCount = 0
         Dim exportStatus As String: exportStatus = "No"
         Dim strDesc As String: strDesc = ""
-        ' === EXPLICIT VARIABLE RESET END ===
 
         Dim swCurrFeat As SldWorks.Feature: Set swCurrFeat = swModel.FeatureByName(featNames(i))
         Dim swFolderObj As SldWorks.BodyFolder: Set swFolderObj = swCurrFeat.GetSpecificFeature2
@@ -80,19 +79,16 @@ Sub main()
         
         If Not IsEmpty(vBods) Then
             Dim swBody As SldWorks.Body2: Set swBody = vBods(0)
-            faceCount = swBody.GetFaceCount - 2
+            faceCount = swBody.GetFaceCount - 2 ' only 2d surface is need
             
             ' A. CALCULATE DIMENSIONS
-            ' === FIX IS HERE: Don't Re-Dim, just Assign ===
             bBox = swBody.GetBodyBox
-            
             If Not IsEmpty(bBox) Then
                 Dim dArr(2) As Double
                 dArr(0) = bBox(3) - bBox(0) ' X Len
                 dArr(1) = bBox(4) - bBox(1) ' Y Len
                 dArr(2) = bBox(5) - bBox(2) ' Z Len
                 
-                ' Inline Bubble Sort (Smallest to Largest)
                 Dim x As Integer, y As Integer, temp As Double
                 For x = 0 To 1
                     For y = x + 1 To 2
@@ -102,9 +98,9 @@ Sub main()
                     Next y
                 Next x
                 
-                valT = Round(dArr(0) * 1000, 2) ' Smallest
-                valW = Round(dArr(1) * 1000, 2) ' Middle
-                valL = Round(dArr(2) * 1000, 2) ' Largest
+                valT = Round(dArr(0) * 1000, 2)
+                valW = Round(dArr(1) * 1000, 2)
+                valL = Round(dArr(2) * 1000, 2)
             End If
             
             ' B. GET PROPERTIES
@@ -129,11 +125,10 @@ Sub main()
             bFaceFound = SelectLargestFaceAndGetNormal(swBody, detectedAxis)
             
             If bFaceFound Then
-                Dim fileName As String: fileName = newName & " (" & swFolderObj.GetBodyCount & "X) " & ".dxf"
+                Dim fileName As String: fileName = newName & ".dxf"
                 Dim vAlign As Variant: vAlign = GetMatrixForAxis(detectedAxis)
                 
                 Dim bRet As Boolean
-                ' Export using Option 2 (as requested)
                 bRet = swPart.ExportToDWG2(dxfPath & fileName, fullPath, 2, True, vAlign, False, False, 0, Nothing)
                 
                 If bRet Then
