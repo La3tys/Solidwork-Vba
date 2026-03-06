@@ -80,7 +80,7 @@ Sub main()
         
         If Not IsEmpty(vBods) Then
             Dim swBody As SldWorks.Body2: Set swBody = vBods(0)
-            faceCount = swBody.GetFaceCount
+            faceCount = swBody.GetFaceCount - 2
             
             ' A. CALCULATE DIMENSIONS
             ' === FIX IS HERE: Don't Re-Dim, just Assign ===
