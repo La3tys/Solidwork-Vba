@@ -232,7 +232,7 @@ Sub main()
             
             If bFaceFound Then
                 Dim fileName As String
-                fileName = CleanFileName(strDesc) & ".dxf"
+                fileName = CleanFileName(strDesc) & "(" & bodyQty & "x).dxf"
                 Dim vAlign As Variant
                 vAlign = GetMatrixForAxis(detectedAxis)
                 
@@ -258,7 +258,7 @@ Sub main()
         swModel.ClearSelection2 True
     Next i
     
-    Shell "explorer.exe """ & dxfPath & """", vbNormalFocus
+    'Shell "explorer.exe """ & dxfPath & """", vbNormalFocus
     UserForm1.Show
 End Sub
 
