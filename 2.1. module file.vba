@@ -8,6 +8,17 @@ Public copyData As String
 Public swModel As SldWorks.ModelDoc2
 Public selectedAxis As String
 
+Private Type RoundHoleCylinderGroup
+    originX As Double
+    originY As Double
+    originZ As Double
+    axisX As Double
+    axisY As Double
+    axisZ As Double
+    radius As Double
+    angularCoverage As Double
+End Type
+
 Sub main()
     Dim swApp As SldWorks.SldWorks
     Dim fullPath As String
@@ -89,7 +100,7 @@ Sub main()
     Next i
 
     ReDim cleanDescs(0 To count - 1)
-    copyData = "Item" & vbTab & "Description" & vbTab & "Material" & vbTab & "Pos." & vbTab & "Qty" & vbTab & "Length" & vbTab & "Width" & vbTab & "Height" & vbTab & "Cut-length(Perimeter)" & vbTab & "Transition(Faces)" & vbCrLf
+    copyData = "Item" & vbTab & "Description" & vbTab & "Material" & vbTab & "Pos." & vbTab & "Qty" & vbTab & "Length" & vbTab & "Width" & vbTab & "Height" & vbTab & "Cut-length(Perimeter)" & vbTab & "Transition(Faces)" & vbTab & "Round Holes" & vbCrLf
     logData = ""
 
     For i = 0 To count - 1
@@ -182,7 +193,7 @@ Public Sub AppendCutListLogRow(ByVal itemIndex As Long)
     Dim swBody As SldWorks.Body2
     Dim swCustPropMgr As SldWorks.CustomPropertyManager
     Dim bodyQty As Long, valL As Double, valW As Double, valH As Double
-    Dim totalPerimeter As Double, contourSegments As Long, detectedAxis As String
+    Dim totalPerimeter As Double, contourSegments As Long, roundHoleCount As Long, detectedAxis As String
     Dim dArr(2) As Double, x As Integer, y As Integer, temp As Double
     Dim folderName As String, strDesc As String, strMaterial As String, strPos As String
     Dim descParts() As String, rowStr As String
@@ -235,9 +246,120 @@ Public Sub AppendCutListLogRow(ByVal itemIndex As Long)
     End If
 
     GetLargestFaceMetrics swBody, detectedAxis, totalPerimeter, contourSegments
+    roundHoleCount = CountRoundHoles(swBody)
 
-    rowStr = (itemIndex + 1) & vbTab & strDesc & vbTab & strMaterial & vbTab & strPos & vbTab & bodyQty & vbTab & valL & vbTab & valW & vbTab & valH & vbTab & Round(totalPerimeter, 2) & vbTab & contourSegments
+    rowStr = (itemIndex + 1) & vbTab & strDesc & vbTab & strMaterial & vbTab & strPos & vbTab & bodyQty & vbTab & valL & vbTab & valW & vbTab & valH & vbTab & Round(totalPerimeter, 2) & vbTab & contourSegments & vbTab & roundHoleCount
     logData = logData & rowStr & vbCrLf
+End Sub
+
+Public Function CountRoundHoles(ByVal swBody As SldWorks.Body2) As Long
+    Const PI As Double = 3.14159265358979
+    Const FULL_CIRCLE_TOLERANCE As Double = 0.01
+    Const AXIS_TOLERANCE As Double = 0.0001
+    Const RADIUS_TOLERANCE As Double = 0.00001
+    Dim groups() As RoundHoleCylinderGroup
+    Dim groupCount As Long, i As Long, j As Long
+    Dim swFace As SldWorks.Face2, swSurface As SldWorks.Surface
+    Dim cylinderParams As Variant, uvBounds As Variant, faceNormal As Variant
+    Dim axisX As Double, axisY As Double, axisZ As Double
+    Dim angularSpan As Double
+
+    Set swFace = swBody.GetFirstFace
+    Do While Not swFace Is Nothing
+        Set swSurface = swFace.GetSurface
+        If Not swSurface Is Nothing Then
+            If swSurface.IsCylinder Then
+                cylinderParams = swSurface.CylinderParams
+                uvBounds = swFace.GetUVBounds
+                faceNormal = swFace.Normal
+
+                If IsArray(cylinderParams) And IsArray(uvBounds) And IsArray(faceNormal) Then
+                    axisX = cylinderParams(3): axisY = cylinderParams(4): axisZ = cylinderParams(5)
+                    NormalizeVector axisX, axisY, axisZ
+                    angularSpan = Abs(uvBounds(1) - uvBounds(0))
+
+                    If angularSpan > 0# And angularSpan <= (2# * PI + FULL_CIRCLE_TOLERANCE) Then
+                        ' Imported STEP faces can return a zero face normal, so use
+                        ' full circular coverage and shared-axis grouping instead.
+                        AddCylinderFaceGroup groups, groupCount, cylinderParams, axisX, axisY, axisZ, angularSpan, AXIS_TOLERANCE, RADIUS_TOLERANCE
+                    End If
+                End If
+            End If
+        End If
+        Set swFace = swFace.GetNextFace
+    Loop
+
+    For i = 0 To groupCount - 1
+        If groups(i).angularCoverage >= (2# * PI - FULL_CIRCLE_TOLERANCE) Then
+            For j = 0 To i - 1
+                If groups(j).angularCoverage >= (2# * PI - FULL_CIRCLE_TOLERANCE) Then
+                    If SameAxisLine(groups(i).originX, groups(i).originY, groups(i).originZ, groups(i).axisX, groups(i).axisY, groups(i).axisZ, groups(j).originX, groups(j).originY, groups(j).originZ, groups(j).axisX, groups(j).axisY, groups(j).axisZ, AXIS_TOLERANCE) Then Exit For
+                End If
+            Next j
+            If j = i Then CountRoundHoles = CountRoundHoles + 1
+        End If
+    Next i
+End Function
+
+Private Sub AddCylinderFaceGroup(ByRef groups() As RoundHoleCylinderGroup, ByRef groupCount As Long, ByRef cylinderParams As Variant, ByVal axisX As Double, ByVal axisY As Double, ByVal axisZ As Double, ByVal angularSpan As Double, ByVal axisTolerance As Double, ByVal radiusTolerance As Double)
+    Dim i As Long
+
+    For i = 0 To groupCount - 1
+        If Abs(groups(i).radius - cylinderParams(6)) <= radiusTolerance Then
+            If SameAxisLine(groups(i).originX, groups(i).originY, groups(i).originZ, groups(i).axisX, groups(i).axisY, groups(i).axisZ, cylinderParams(0), cylinderParams(1), cylinderParams(2), axisX, axisY, axisZ, axisTolerance) Then
+                groups(i).angularCoverage = groups(i).angularCoverage + angularSpan
+                Exit Sub
+            End If
+        End If
+    Next i
+
+    ReDim Preserve groups(0 To groupCount)
+    groups(groupCount).originX = cylinderParams(0): groups(groupCount).originY = cylinderParams(1): groups(groupCount).originZ = cylinderParams(2)
+    groups(groupCount).axisX = axisX: groups(groupCount).axisY = axisY: groups(groupCount).axisZ = axisZ
+    groups(groupCount).radius = cylinderParams(6)
+    groups(groupCount).angularCoverage = angularSpan
+    groupCount = groupCount + 1
+End Sub
+
+Private Function IsInnerCylinderFace(ByVal swFace As SldWorks.Face2, ByVal swSurface As SldWorks.Surface, ByRef cylinderParams As Variant, ByRef uvBounds As Variant, ByRef faceNormal As Variant, ByVal axisX As Double, ByVal axisY As Double, ByVal axisZ As Double) As Boolean
+    Dim evaluatedPoint As Variant
+    Dim pointX As Double, pointY As Double, pointZ As Double
+    Dim radialX As Double, radialY As Double, radialZ As Double
+    Dim axialDistance As Double
+
+    evaluatedPoint = swSurface.Evaluate((uvBounds(0) + uvBounds(1)) / 2#, (uvBounds(2) + uvBounds(3)) / 2#, 0, 0)
+    If Not IsArray(evaluatedPoint) Then Exit Function
+
+    pointX = evaluatedPoint(0) - cylinderParams(0)
+    pointY = evaluatedPoint(1) - cylinderParams(1)
+    pointZ = evaluatedPoint(2) - cylinderParams(2)
+    axialDistance = pointX * axisX + pointY * axisY + pointZ * axisZ
+    radialX = pointX - axialDistance * axisX
+    radialY = pointY - axialDistance * axisY
+    radialZ = pointZ - axialDistance * axisZ
+
+    IsInnerCylinderFace = (faceNormal(0) * radialX + faceNormal(1) * radialY + faceNormal(2) * radialZ) < 0#
+End Function
+
+Private Function SameAxisLine(ByVal originX1 As Double, ByVal originY1 As Double, ByVal originZ1 As Double, ByVal axisX1 As Double, ByVal axisY1 As Double, ByVal axisZ1 As Double, ByVal originX2 As Double, ByVal originY2 As Double, ByVal originZ2 As Double, ByVal axisX2 As Double, ByVal axisY2 As Double, ByVal axisZ2 As Double, ByVal tolerance As Double) As Boolean
+    Dim dotProduct As Double, deltaX As Double, deltaY As Double, deltaZ As Double
+    Dim radialX As Double, radialY As Double, radialZ As Double
+
+    dotProduct = axisX1 * axisX2 + axisY1 * axisY2 + axisZ1 * axisZ2
+    If Abs(Abs(dotProduct) - 1#) > 0.001 Then Exit Function
+
+    deltaX = originX2 - originX1: deltaY = originY2 - originY1: deltaZ = originZ2 - originZ1
+    radialX = deltaX - (deltaX * axisX1 + deltaY * axisY1 + deltaZ * axisZ1) * axisX1
+    radialY = deltaY - (deltaX * axisX1 + deltaY * axisY1 + deltaZ * axisZ1) * axisY1
+    radialZ = deltaZ - (deltaX * axisX1 + deltaY * axisY1 + deltaZ * axisZ1) * axisZ1
+    SameAxisLine = Sqr(radialX * radialX + radialY * radialY + radialZ * radialZ) <= tolerance
+End Function
+
+Private Sub NormalizeVector(ByRef x As Double, ByRef y As Double, ByRef z As Double)
+    Dim length As Double
+    length = Sqr(x * x + y * y + z * z)
+    If length = 0# Then Exit Sub
+    x = x / length: y = y / length: z = z / length
 End Sub
 
 Public Function GetLargestFaceMetrics(ByVal swBody As SldWorks.Body2, ByRef axisOut As String, ByRef perimeterOut As Double, ByRef segmentCountOut As Long) As Boolean
@@ -320,6 +442,69 @@ Public Function SelectLargestFaceAndGetNormal(body As SldWorks.Body2, ByRef axis
     End If
 
     SelectLargestFaceAndGetNormal = True
+End Function
+
+Public Function SelectParallelFacesForExport(ByVal body As SldWorks.Body2, ByRef axisOut As String) As Boolean
+    Const PARALLEL_DOT_TOLERANCE As Double = 0.99
+    Dim swFace As SldWorks.Face2, bestFace As SldWorks.Face2
+    Dim bestNormal As Variant, faceNormal As Variant
+    Dim maxArea As Double, dotProduct As Double
+    Dim bestLength As Double, faceLength As Double
+
+    maxArea = -1#
+    Set swFace = body.GetFirstFace
+    Do While Not swFace Is Nothing
+        On Error Resume Next
+        faceNormal = swFace.Normal
+        If Err.Number = 0 And IsArray(faceNormal) Then
+            If UBound(faceNormal) >= 2 Then
+                faceLength = Sqr(faceNormal(0) * faceNormal(0) + faceNormal(1) * faceNormal(1) + faceNormal(2) * faceNormal(2))
+                If faceLength > 0# And swFace.GetArea > maxArea Then
+                    maxArea = swFace.GetArea
+                    Set bestFace = swFace
+                    bestNormal = faceNormal
+                End If
+            End If
+        End If
+        Err.Clear
+        On Error GoTo 0
+        Set swFace = swFace.GetNextFace
+    Loop
+
+    If bestFace Is Nothing Then Exit Function
+
+    bestLength = Sqr(bestNormal(0) * bestNormal(0) + bestNormal(1) * bestNormal(1) + bestNormal(2) * bestNormal(2))
+    If bestLength = 0# Then Exit Function
+
+    If Not bestFace.Select4(False, Nothing) Then Exit Function
+    Set swFace = body.GetFirstFace
+    Do While Not swFace Is Nothing
+        On Error Resume Next
+        faceNormal = swFace.Normal
+        If Err.Number = 0 And IsArray(faceNormal) Then
+            If UBound(faceNormal) >= 2 Then
+                faceLength = Sqr(faceNormal(0) * faceNormal(0) + faceNormal(1) * faceNormal(1) + faceNormal(2) * faceNormal(2))
+                If faceLength > 0# Then
+                    dotProduct = (faceNormal(0) * bestNormal(0) + faceNormal(1) * bestNormal(1) + faceNormal(2) * bestNormal(2)) / (faceLength * bestLength)
+                    If Abs(dotProduct) >= PARALLEL_DOT_TOLERANCE And Not (swFace Is bestFace) Then
+                        If Not swFace.Select4(True, Nothing) Then Exit Function
+                    End If
+                End If
+            End If
+        End If
+        Err.Clear
+        On Error GoTo 0
+        Set swFace = swFace.GetNextFace
+    Loop
+
+    If Abs(bestNormal(0)) > 0.9 Then
+        axisOut = "X"
+    ElseIf Abs(bestNormal(1)) > 0.9 Then
+        axisOut = "Y"
+    Else
+        axisOut = "Z"
+    End If
+    SelectParallelFacesForExport = True
 End Function
 
 Public Function GetMatrixForAxis(axis As String) As Variant
