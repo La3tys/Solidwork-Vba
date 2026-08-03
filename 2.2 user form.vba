@@ -9,7 +9,7 @@ Private Sub UserForm_Initialize()
     isInitializing = True
     Me.Caption = "Cut-List Extraction Log"
     lstLog.ColumnCount = 10
-    lstLog.ColumnWidths = "30 pt;150 pt;80 pt;40 pt;30 pt;60 pt;60 pt;60 pt;70 pt;80 pt"
+    lstLog.ColumnWidths = "30 pt;150 pt;40 pt;30 pt;60 pt;60 pt;60 pt;70 pt;80 pt;65 pt"
     SetLogHeaders
 
     rows = Split(logData, vbCrLf)
@@ -17,7 +17,7 @@ Private Sub UserForm_Initialize()
     For i = 0 To UBound(rows)
         If Trim$(rows(i)) <> "" Then
             cols = Split(rows(i), vbTab)
-            If UBound(cols) >= 9 Then
+            If UBound(cols) >= 10 Then
                 AddLogRow cols, r
                 r = r + 1
             End If
@@ -147,7 +147,7 @@ Private Sub cmdExportDXF_Click()
 
                         swExportBody.HideBody False
                         activeModel.ClearSelection2 True
-                        bFaceFound = SelectLargestFaceAndGetNormal(swExportBody, detectedAxis)
+                        bFaceFound = SelectParallelFacesForExport(swExportBody, detectedAxis)
 
                         If bFaceFound Then
                             fullFeatName = swCurrFeat.Name
@@ -200,7 +200,7 @@ Public Sub RefreshLogFromCleanDescs()
         AppendCutListLogRow i
     Next i
 
-    copyData = "Item" & vbTab & "Description" & vbTab & "Material" & vbTab & "Pos." & vbTab & "Qty" & vbTab & "Length" & vbTab & "Width" & vbTab & "Height" & vbTab & "Cut-length(Perimeter)" & vbTab & "Transition(Faces)" & vbCrLf & logData
+    copyData = "Item" & vbTab & "Description" & vbTab & "Material" & vbTab & "Pos." & vbTab & "Qty" & vbTab & "Length" & vbTab & "Width" & vbTab & "Height" & vbTab & "Cut-length(Perimeter)" & vbTab & "Transition(Faces)" & vbTab & "Round Holes" & vbCrLf & logData
     PopulateLog
 End Sub
 
@@ -216,7 +216,7 @@ Private Sub PopulateLog()
     For i = 0 To UBound(rows)
         If Trim$(rows(i)) <> "" Then
             cols = Split(rows(i), vbTab)
-            If UBound(cols) >= 9 Then
+            If UBound(cols) >= 10 Then
                 AddLogRow cols, r
                 r = r + 1
             End If
@@ -227,27 +227,27 @@ End Sub
 Private Sub SetLogHeaders()
     lstLog.AddItem "Item"
     lstLog.List(0, 1) = "Description"
-    lstLog.List(0, 2) = "Material"
-    lstLog.List(0, 3) = "Pos."
-    lstLog.List(0, 4) = "Qty"
-    lstLog.List(0, 5) = "Length"
-    lstLog.List(0, 6) = "Width"
-    lstLog.List(0, 7) = "Height"
-    lstLog.List(0, 8) = "Cut-Length"
-    lstLog.List(0, 9) = "Transition"
+    lstLog.List(0, 2) = "Pos."
+    lstLog.List(0, 3) = "Qty"
+    lstLog.List(0, 4) = "Length"
+    lstLog.List(0, 5) = "Width"
+    lstLog.List(0, 6) = "Height"
+    lstLog.List(0, 7) = "Cut-Length"
+    lstLog.List(0, 8) = "Transition"
+    lstLog.List(0, 9) = "Round Holes"
 End Sub
 
 Private Sub AddLogRow(ByRef cols() As String, ByVal rowIndex As Long)
     lstLog.AddItem cols(0)
     lstLog.List(rowIndex, 1) = cols(1)
-    lstLog.List(rowIndex, 2) = cols(2)
-    lstLog.List(rowIndex, 3) = cols(3)
-    lstLog.List(rowIndex, 4) = cols(4)
-    lstLog.List(rowIndex, 5) = cols(5)
-    lstLog.List(rowIndex, 6) = cols(6)
-    lstLog.List(rowIndex, 7) = cols(7)
-    lstLog.List(rowIndex, 8) = cols(8)
-    lstLog.List(rowIndex, 9) = cols(9)
+    lstLog.List(rowIndex, 2) = cols(3)
+    lstLog.List(rowIndex, 3) = cols(4)
+    lstLog.List(rowIndex, 4) = cols(5)
+    lstLog.List(rowIndex, 5) = cols(6)
+    lstLog.List(rowIndex, 6) = cols(7)
+    lstLog.List(rowIndex, 7) = cols(8)
+    lstLog.List(rowIndex, 8) = cols(9)
+    lstLog.List(rowIndex, 9) = cols(10)
 End Sub
 
 Private Sub GetSortedBodyDimensions(ByVal swBody As SldWorks.Body2, ByRef valL As Double, ByRef valW As Double, ByRef valH As Double)
